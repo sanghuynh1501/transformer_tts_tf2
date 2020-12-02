@@ -2,10 +2,8 @@ import sys
 import tensorflow as tf
 import hyperparameter as hp
 from utils import create_encoder_padding_mask, create_mel_padding_mask, create_look_ahead_mask
-from losses import weighted_sum_losses, masked_mean_absolute_error, new_scaled_crossentropy
 from tokenizer import Tokenizer
-from layers import DecoderPrenet, Postnet, DurationPredictor, Expand, SelfAttentionBlocks, CrossAttentionBlocks, \
-    CNNResNorm
+from layers import DecoderPrenet, Postnet, SelfAttentionBlocks, CrossAttentionBlocks
 
 devices = tf.config.experimental.list_physical_devices('GPU')
 
@@ -87,24 +85,6 @@ class AutoregressiveTransformer(tf.keras.models.Model):
                                        conv_layers=postnet_conv_layers,
                                        kernel_size=postnet_kernel_size,
                                        name='Postnet')
-
-        self.training_input_signature = [
-            tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-            tf.TensorSpec(shape=(None, None, mel_channels), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None), dtype=tf.int32)
-        ]
-        self.forward_input_signature = [
-            tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-            tf.TensorSpec(shape=(None, None, mel_channels), dtype=tf.float32),
-        ]
-        self.encoder_signature = [
-            tf.TensorSpec(shape=(None, None), dtype=tf.int32)
-        ]
-        self.decoder_signature = [
-            tf.TensorSpec(shape=(None, None, encoder_model_dimension), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None, mel_channels), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, None, None, None), dtype=tf.float32),
-        ]
 
     def _call_encoder(self, inputs, training):
         padding_mask = create_encoder_padding_mask(inputs)
