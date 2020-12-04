@@ -4,12 +4,15 @@ import tensorflow as tf
 
 from config import Config
 import hyperparameter as hp
+from losses import masked_mean_absolute_error, new_scaled_crossentropy
 from data_hdf5 import HDF5DatasetGenerator
-from losses import new_scaled_crossentropy, masked_mean_absolute_error
+from audio import Audio
+
+audio_config = Audio(hp)
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=4000):
+    def __init__(self, d_model, warmup_steps=139800):
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -25,10 +28,10 @@ class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 
 
 epoch = 100
-batch_size = 16
+batch_size = 4
 
-train_data = HDF5DatasetGenerator('train.hdf5', batch_size)
-test_data = HDF5DatasetGenerator('test.hdf5', batch_size)
+train_data = HDF5DatasetGenerator('tts_train.hdf5', batch_size)
+test_data = HDF5DatasetGenerator('tts_test.hdf5', batch_size)
 
 train_total = train_data.get_total_samples()
 test_total = test_data.get_total_samples()
@@ -57,16 +60,47 @@ def train_step(inp, tar, stop_prob, mel_len):
     tar_real = tar[:, 1:]
     tar_stop_prob = stop_prob[:, 1:]
 
-    tar_mel = tar_inp[:, 0::10, :]
+    tar_mel = tar_inp[:, 0::np.array(hp.reduction_factor_schedule)[0, 1].astype(np.int32), :]
 
     with tf.GradientTape() as tape:
+        print("inp.shape ", inp.shape)
+        print("tar_mel.shape  ", tar_mel.shape)
         mel, mel_linear, final_output, stop_prob, _, _, _ = transformer(inp, tar_mel, True)
-        loss = loss_function(tar_real, tar_stop_prob, final_output[:, :mel_len, :], stop_prob[:, :mel_len, :], mel_linear[:, :mel_len, :])
+        loss = loss_function(tar_real, tar_stop_prob, final_output[:, :mel_len, :], stop_prob[:, :mel_len, :],
+                             mel_linear[:, :mel_len, :])
 
     gradients = tape.gradient(loss, transformer.trainable_variables)
     optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
 
     train_loss(loss)
+
+
+def test_step(inp, tar, stop_prob, mel_len):
+    tar_inp = tar[:, :-1]
+    tar_real = tar[:, 1:]
+    tar_stop_prob = stop_prob[:, 1:]
+
+    tar_mel = tar_inp[:, 0::np.array(hp.reduction_factor_schedule)[0, 1].astype(np.int32), :]
+
+    mel, mel_linear, final_output, stop_prob, _, _, _ = transformer(inp, tar_mel, False)
+    loss = loss_function(tar_real, tar_stop_prob, final_output[:, :mel_len, :], stop_prob[:, :mel_len, :],
+                         mel_linear[:, :mel_len, :])
+
+    test_loss(loss)
+
+
+def validate_step(inp, tar):
+    tar_inp = tar[:, :-1]
+
+    tar_mel = tar_inp[:, 0::np.array(hp.reduction_factor_schedule)[0, 1].astype(np.int32), :]
+
+    mel, mel_linear, final_output, stop_prob, _, _, _ = transformer(inp, tar_mel, False)
+
+    origin_mel = tf.expand_dims(tar[0], 0).numpy().T
+    predict_mel = tf.expand_dims(mel[0], 0).numpy().T
+
+    audio_config.save_mel_image(origin_mel, "origin")
+    audio_config.save_mel_image(predict_mel, "predict")
 
 
 def padding_data(audios, labels, stop_tokens, audio_len, text_len):
@@ -80,6 +114,17 @@ def padding_data(audios, labels, stop_tokens, audio_len, text_len):
     return audios_batch, labels_batch, stop_tokens_batch, max_audio_len
 
 
+checkpoint_path = "transformer_tts_512"
+
+ckpt = tf.train.Checkpoint(transformer=transformer,
+                           optimizer=optimizer)
+
+ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
+
+if ckpt_manager.latest_checkpoint:
+    ckpt.restore(ckpt_manager.latest_checkpoint)
+    print('Latest checkpoint restored!!')
+
 min_loss = float('inf')
 
 for epoch in range(1000):
@@ -87,10 +132,31 @@ for epoch in range(1000):
     train_loss.reset_states()
     test_loss.reset_states()
 
+    test_audios = np.array([])
+    test_labels = np.array([])
+
     with tqdm(total=train_total) as pbar:
         for audios, labels, length, text_length, stop_tokens in train_data.generator():
+            print('np.array(hp.reduction_factor_schedule)[0, 1].astype(np.int32) ', np.array(hp.reduction_factor_schedule)[0, 1].astype(np.int32))
             audios, labels, stop_tokens, mel_len = padding_data(audios, labels, stop_tokens, length, text_length)
             train_step(labels, audios, stop_tokens, mel_len - 1)
             pbar.update(batch_size)
 
-    print('Epoch {} Train Loss {:.4f}'.format(epoch + 1, train_loss.result()))
+    with tqdm(total=test_total) as pbar:
+        for audios, labels, length, text_length, stop_tokens in test_data.generator():
+            audios, labels, stop_tokens, mel_len = padding_data(audios, labels, stop_tokens, length, text_length)
+            test_step(labels, audios, stop_tokens, mel_len - 1)
+            pbar.update(batch_size)
+
+            test_audios = audios
+            test_labels = labels
+
+    validate_step(test_labels, test_audios)
+
+    if test_loss.result() < min_loss:
+        ckpt_save_path = ckpt_manager.save()
+        print('Saving checkpoint for epoch {} at {}'.format(epoch + 1,
+                                                            ckpt_save_path))
+        min_loss = test_loss.result()
+
+    print('Epoch {} Train Loss {:.4f} Test Loss {:.4f}'.format(epoch + 1, train_loss.result(), test_loss.result()))

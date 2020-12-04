@@ -4,6 +4,7 @@ import librosa
 import numpy as np
 import librosa.display
 from matplotlib import pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import soundfile as sf
 import hyperparameter as hp
 
@@ -75,6 +76,25 @@ class Audio:
                                       fmax=self.config.f_max)
         f.add_subplot(ax)
         return f
+
+    def save_mel_image(self, mel, image_name, is_normal=True):
+        if is_normal:
+            mel = self._denormalize(mel)
+        mel = np.reshape(mel, (mel.shape[0], mel.shape[1]))
+
+        fig = plt.Figure()
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+
+        s_db = librosa.power_to_db(mel, ref=np.max)
+        p = librosa.display.specshow(s_db,
+                                     x_axis='time',
+                                     y_axis='mel',
+                                     ax=ax,
+                                     sr=self.config.sampling_rate,
+                                     fmin=self.config.f_min,
+                                     fmax=self.config.f_max)
+        fig.savefig(image_name + '.png')
 
     def load_wav(self, wav_path):
         y, sr = librosa.load(wav_path, sr=self.config.sampling_rate)

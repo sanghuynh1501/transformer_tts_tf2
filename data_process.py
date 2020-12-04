@@ -124,6 +124,6 @@ print(len(audio_test))
 print(len(label_train))
 print(len(label_test))
 
-dum_data(audio_train, label_train, 'train.hdf5')
-dum_data(audio_test[:770], label_test[:770], 'test.hdf5')
+dum_data(audio_train, label_train, 'tts_train.hdf5')
+dum_data(audio_test[:770], label_test[:770], 'tts_test.hdf5')
 

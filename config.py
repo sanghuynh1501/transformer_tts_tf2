@@ -58,6 +58,7 @@ if __name__ == '__main__':
     model = config.get_model()
 
     input_text = np.ones((1, 12))
-    target_text = np.ones((1, 500, 80))
+    target_text = np.ones((1, 2000, 80))
     mel, mel_linear, final_output, stop_prob, dec_output, attention_weights, encoder_attention = \
         model(input_text, target_text, False)
+    print('mel.shape ', mel.shape)
